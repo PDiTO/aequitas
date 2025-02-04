@@ -2,6 +2,7 @@ import os
 import sys
 
 from dotenv import load_dotenv
+from langchain.tools import Tool
 
 load_dotenv()
 
@@ -11,55 +12,49 @@ from cdp_langchain.utils import CdpAgentkitWrapper
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import HumanMessage
-
-# Configure a file to persist the agent's CDP MPC Wallet Data.
-wallet_data_file = "wallet_data.txt"
-
-# Initialize the LLM
-# if you want to support Claude, for example, you can replace this line with llm = ChatAnthropic(model="claude-3-5-sonnet-20240620"), replace the `from langchain_openai...` import with `from langchain_anthropic import ChatAnthropic`, and run in your terminal `export ANTHROPIC_API_KEY="your-api-key"
-llm = ChatOpenAI(model="gpt-4o-mini", api_key=os.getenv("OPENAI_API_KEY"))  
-
-# Initialize CDP AgentKit wrapper
-cdp = CdpAgentkitWrapper()
-
-# Create toolkit from wrapper
-cdp_toolkit = CdpToolkit.from_cdp_agentkit_wrapper(cdp)
-
-# Get all available tools
-tools = cdp_toolkit.get_tools()
-
-# Store memory
-memory = MemorySaver()
-config = {"configurable": {"thread_id":"Aequitas"}}
+from langchain_community.utilities import GoogleSerperAPIWrapper
 
 # Create agent
-def initialize_agent():
-    """Initialize the agent with CDP Agentkit."""
+def initialize_agent(wallet_data: str = None):
+
+    print("Initializing agent... with wallet data: ", wallet_data)
+    """Initialize the agent with CDP Agentkit.
+    
+    Args:
+        wallet_data (str, optional): The CDP wallet data to initialize the agent with.
+            If None, a new wallet will be created.
+    """
     # Initialize LLM.
-    llm = ChatOpenAI(model="gpt-4o-mini")
-
-    wallet_data = None
-
-    if os.path.exists(wallet_data_file):
-        with open(wallet_data_file) as f:
-            wallet_data = f.read()
+    llm = ChatOpenAI(model=os.getenv("MODEL_NAME"), api_key=os.getenv("OPENAI_API_KEY"))  
 
     # Configure CDP Agentkit Langchain Extension.
     values = {}
     if wallet_data is not None:
-        # If there is a persisted agentic wallet, load it and pass to the CDP Agentkit Wrapper.
         values = {"cdp_wallet_data": wallet_data}
 
     agentkit = CdpAgentkitWrapper(**values)
 
-    # persist the agent's CDP MPC Wallet Data.
-    wallet_data = agentkit.export_wallet()
-    with open(wallet_data_file, "w") as f:
-        f.write(wallet_data)
-
     # Initialize CDP Agentkit Toolkit and get tools.
     cdp_toolkit = CdpToolkit.from_cdp_agentkit_wrapper(agentkit)
-    tools = cdp_toolkit.get_tools()
+    all_tools = cdp_toolkit.get_tools()
+    
+    # Filter to only use specific CDP tools (customize this list as needed)
+    wanted_tool_names = [
+        "get_balance",
+        "transfer",
+        "get_wallet_details",
+    ]
+    
+    tools = [tool for tool in all_tools if tool.name in wanted_tool_names]
+
+    # Add Google Serper API tool
+    search = GoogleSerperAPIWrapper(serper_api_key=os.getenv("SERPER_API_KEY"))
+    search_tool = Tool(
+        name="Search",
+        description="Search the internet for current information. Use this tool when you need to find information about current events, facts, or anything that requires up-to-date information.",
+        func=search.run
+    )
+    tools.append(search_tool)
 
     # Store buffered conversation history in memory.
     memory = MemorySaver()
@@ -110,11 +105,25 @@ def run_chat_mode(agent_executor, config):
 
 def main():
     """Start the chatbot agent."""
-    agent_executor, config = initialize_agent()
-
+    agent_executor, config = initialize_agent()  # Creates a new wallet by default
     run_chat_mode(agent_executor=agent_executor, config=config)
 
+# Example of how to use with a specific wallet:
+def run_with_wallet(wallet_data: str):
+    """Run the agent with a specific wallet.
+    
+    Args:
+        wallet_data (str): The CDP wallet data to use.
+    """
+    agent_executor, config = initialize_agent(wallet_data=wallet_data)
+    run_chat_mode(agent_executor=agent_executor, config=config)
 
 if __name__ == "__main__":
-    print("Starting Agent...")
-    main()
+    # Load wallet data from file
+    try:
+        with open("wallet_data.txt", "r") as f:
+            wallet_data = f.read().strip()
+    except FileNotFoundError:
+        print("No wallet data file found. Please create a wallet first.")
+        sys.exit(1)
+    run_with_wallet(wallet_data=wallet_data)

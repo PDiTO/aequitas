@@ -38,3 +38,6 @@ htmlcov/
 .vscode/
 *.swp
 *.swo
+
+# Wallet Data
+wallet_data.txt
